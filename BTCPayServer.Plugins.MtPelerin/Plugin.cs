@@ -9,7 +9,8 @@ namespace BTCPayServer.Plugins.MtPelerin;
 
 public class Plugin : BaseBTCPayServerPlugin
 {
-    public override string Identifier => "BTCPayServer.Plugins.mtpelerin";
+    public override string Identifier => "mtpelerin";
+    public override string Name => "MtPelerin";
 
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
     {

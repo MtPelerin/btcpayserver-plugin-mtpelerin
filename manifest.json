@@ -1,0 +1,13 @@
+{
+  "Identifier": "mtpelerin",
+  "Name": "MtPelerin",
+  "Version": "1.0.2.0",
+  "Description": "Forward funds to MtPelerin.",
+  "SystemPlugin": false,
+  "Dependencies": [
+    {
+      "Identifier": "BTCPayServer",
+      "Condition": ">=2.0.1"
+    }
+  ]
+}
