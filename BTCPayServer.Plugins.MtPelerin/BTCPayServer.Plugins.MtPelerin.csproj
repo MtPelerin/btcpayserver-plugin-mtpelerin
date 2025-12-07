@@ -2,6 +2,8 @@
 
 	<PropertyGroup>
 		<TargetFramework>net8.0</TargetFramework>
+        <AssemblyName>mtpelerin</AssemblyName>
+		<RootNamespace>mtpelerin</RootNamespace>
 	</PropertyGroup>
 
 	<!-- Plugin specific properties -->
