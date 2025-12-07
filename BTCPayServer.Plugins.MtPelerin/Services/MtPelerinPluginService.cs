@@ -21,8 +21,10 @@ using NBXplorer;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -165,7 +167,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                 if (mtPelerinDestination == null)
                     throw new Exception($"Destination parsing failed: {error ?? "Unknown error"}");
 
-                (mtPelerinDestination, error) = await payoutHandler.ParseAndValidateClaimDestination(sDest, blob, cancellationToken);
+               // (mtPelerinDestination, error) = await payoutHandler.ParseAndValidateClaimDestination(sDest, blob, cancellationToken);
 
                 var result = await _pullPaymentHostedService.Claim(new ClaimRequest
                 {
@@ -208,7 +210,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                 SenderBtcAddress = string.Empty
             };
 
-           /*   try
+            try
             {
                 var store = await _storeRepository.FindStore(storeId);
 
@@ -231,7 +233,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                 var address = utxo.Address;
                 signInfo.SenderBtcAddress = address.ToString();
 
-              var explorer = _explorerClientProvider.GetExplorerClient(btcNetwork);
+                var explorer = _explorerClientProvider.GetExplorerClient(btcNetwork);
                 var masterKeyString = await explorer.GetMetadataAsync<string>(
                     derivationScheme.AccountDerivation,
                     WellknownMetadataKeys.MasterHDKey);
@@ -240,19 +242,80 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                 {
                     var extKey = ExtKey.Parse(masterKeyString, btcNetwork.NBitcoinNetwork);
 
-                    var derivedKey = extKey.Derive(utxo.KeyPath);
-                    var privateKeyForSigning = derivedKey.PrivateKey;
+                    var accountKeyPath = new KeyPath("m/84'/0'/0'");
+                    var fullKeyPath = accountKeyPath.Derive(utxo.KeyPath);
+
+                    _logger.LogInformation($"UTXO KeyPath (relative): {utxo.KeyPath}");
+                    _logger.LogInformation($"Full KeyPath: {fullKeyPath}");
+
+                    var derivedKey = extKey.Derive(fullKeyPath);
+
+                    // Vérification (optionnelle mais recommandée)
+                    var derivedAddress = derivedKey.PrivateKey.PubKey.GetAddress(ScriptPubKeyType.Segwit, btcNetwork.NBitcoinNetwork);
+                    _logger.LogInformation($"Derived Address: {derivedAddress}");
+                    _logger.LogInformation($"Expected Address: {signInfo.SenderBtcAddress}");
+                    _logger.LogInformation($"Key is compressed: {derivedKey.PrivateKey.PubKey.IsCompressed}");
+                    var wif = derivedKey.PrivateKey.GetWif(btcNetwork.NBitcoinNetwork).ToString();
+                    _logger.LogInformation($"Derived WIF: {wif}");
 
                     signInfo.Code = new Random().Next(1000, 9999);
                     var messageToSign = "MtPelerin-" + signInfo.Code;
-                    signInfo.Signature = privateKeyForSigning.SignMessageBitcoin(messageToSign, btcNetwork.NBitcoinNetwork);
+                    signInfo.Signature = SignBitcoinMessage(derivedKey.PrivateKey, messageToSign);
+                    _logger.LogInformation($"Signing message: {messageToSign} with address {signInfo.SenderBtcAddress}");
+                    _logger.LogInformation($"Signature: {signInfo.Signature} (derivedKey)");
+
+                    var sSigne2d = SignBitcoinMessage(extKey.PrivateKey, messageToSign);
+                    _logger.LogInformation($"Signature: {sSigne2d} (ExtKey)");
                 }
             }
             catch (Exception e)
             {
                 _logger.LogError(e, "MtPelerinPlugin:GetSigningAdressInfo()");
-            }*/
+            }
             return signInfo;
+        }
+
+
+
+        private string SignBitcoinMessage(Key key, string message)
+        {
+            var magic = "Bitcoin Signed Message:\n";
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+            WriteVarString(writer, magic);
+            WriteVarString(writer, message);
+            var messageBytes = ms.ToArray();
+            var hash = NBitcoin.Crypto.Hashes.DoubleSHA256(messageBytes);
+
+            var compactSig = key.SignCompact(hash, key.PubKey.IsCompressed);
+            byte[] signatureBytes = new byte[65];
+            signatureBytes[0] = (byte)(27 + compactSig.RecoveryId + (key.PubKey.IsCompressed ? 4 : 0));
+            Array.Copy(compactSig.Signature, 0, signatureBytes, 1, 64);
+
+            return Convert.ToBase64String(signatureBytes);
+        }
+
+        private void WriteVarString(BinaryWriter writer, string str)
+        {
+            var bytes = Encoding.UTF8.GetBytes(str);
+            WriteVarInt(writer, bytes.Length);
+            writer.Write(bytes);
+        }
+
+        private void WriteVarInt(BinaryWriter writer, int value)
+        {
+            if (value < 0xfd)
+                writer.Write((byte)value);
+            else if (value <= 0xffff)
+            {
+                writer.Write((byte)0xfd);
+                writer.Write((ushort)value);
+            }
+            else
+            {
+                writer.Write((byte)0xfe);
+                writer.Write(value);
+            }
         }
 
 
@@ -297,12 +360,12 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
 
                     if (cnfg.OffChainEnabled)
                     {
-                        var lightningClient = GetLightningClient(store);
-                        var balance = await lightningClient.GetBalance();
-                        cnfg.OffChainBalance = (balance.OffchainBalance != null
-                                               ? (balance.OffchainBalance.Local ?? 0) : 0).ToDecimal(LightMoneyUnit.BTC);
                         try
                         {
+                            var lightningClient = GetLightningClient(store);
+                            var balance = await lightningClient.GetBalance();
+                            cnfg.OffChainBalance = (balance.OffchainBalance != null
+                                               ? (balance.OffchainBalance.Local ?? 0) : 0).ToDecimal(LightMoneyUnit.BTC);
                             var info = await lightningClient.GetInfo();
                             if (info.Alias == "boltz-client" && balance.OnchainBalance != null)
                             {
