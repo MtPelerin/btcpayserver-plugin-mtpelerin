@@ -8,6 +8,7 @@ using BTCPayServer.Payments;
 using BTCPayServer.Payments.Bitcoin;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Payouts;
+using BTCPayServer.Plugins.MtPelerin.Data;
 using BTCPayServer.Plugins.MtPelerin.Model;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
@@ -30,25 +31,7 @@ using System.Threading.Tasks;
 
 namespace BTCPayServer.Plugins.MtPelerin.Services
 {
-    public class MtPelerinPluginService
-    {
-        private readonly ILogger<MtPelerinPluginService> _logger;
-        private readonly StoreRepository _storeRepository;
-        private readonly MtPelerinPluginDbContext _context;
-        private readonly BTCPayNetworkProvider _networkProvider;
-        private readonly WalletHistogramService _walletHistogramService;
-        private readonly BTCPayWalletProvider _walletProvider;
-        private readonly PaymentMethodHandlerDictionary _handlers;
-        private readonly HttpClient _httpClient2;
-        private readonly LightningClientFactoryService _lightningClientFactory;
-        private readonly IOptions<LightningNetworkOptions> _lightningNetworkOptions;
-        private readonly PullPaymentHostedService _pullPaymentService;
-        private readonly ApplicationDbContextFactory _btcPayDbContextFactory;
-        private readonly PayoutMethodHandlerDictionary _payoutHandlers;
-        private readonly PullPaymentHostedService _pullPaymentHostedService;
-        private readonly ExplorerClientProvider _explorerClientProvider;
-
-        public MtPelerinPluginService(MtPelerinPluginDbContextFactory pluginDbContextFactory,
+    public class MtPelerinPluginService(MtPelerinPluginDbContextFactory pluginDbContextFactory,
                                       StoreRepository storeRepository,
                                       BTCPayNetworkProvider networkProvider,
                                       BTCPayWalletProvider walletProvider,
@@ -57,35 +40,19 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                                       HttpClient httpClient2,
                                       LightningClientFactoryService lightningClientFactory,
                                       IOptions<LightningNetworkOptions> lightningNetworkOptions,
-                                      PullPaymentHostedService pullPaymentService,
                                       PaymentMethodHandlerDictionary handlers,
                                       ApplicationDbContextFactory btcPayDbContextFactory,
                                       PayoutMethodHandlerDictionary payoutHandlers,
                                       PullPaymentHostedService pullPaymentHostedService,
                                       ExplorerClientProvider explorerClientProvider)
-        {
-            _logger = logger;
-            _context = pluginDbContextFactory.CreateContext();
-            _networkProvider = networkProvider;
-            _storeRepository = storeRepository;
-            _walletHistogramService = walletHistogramService;
-            _walletProvider = walletProvider;
-            _handlers = handlers;
-            _httpClient2 = httpClient2;
-            _lightningClientFactory = lightningClientFactory;
-            _lightningNetworkOptions = lightningNetworkOptions;
-            _pullPaymentService = pullPaymentService;
-            _btcPayDbContextFactory = btcPayDbContextFactory;
-            _payoutHandlers = payoutHandlers;
-            _pullPaymentHostedService = pullPaymentHostedService;
-            _explorerClientProvider = explorerClientProvider;
-        }
+    {
 
         public async Task<MtPelerinSettings> GetStoreSettings(string storeId)
         {
             try
             {
-                var settings = await _context.MtPelerinSettings.FirstOrDefaultAsync(a => a.StoreId == storeId);
+                using var context = pluginDbContextFactory.CreateContext();
+                var settings = await context.MtPelerinSettings.FirstOrDefaultAsync(a => a.StoreId == storeId);
                 if (settings == null)
                 {
                     settings = new MtPelerinSettings { StoreId = storeId, Lang = "en", Phone = string.Empty, UseBridgeApp = false };
@@ -95,7 +62,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
             }
             catch (Exception e)
             {
-                _logger.LogError(e, "MtPelerinPlugin:GetStoreSettings()");
+                logger.LogError(e, "MtPelerinPlugin:GetStoreSettings()");
                 throw;
             }
         }
@@ -104,26 +71,27 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
         {
             try
             {
-                var dbSettings = await _context.MtPelerinSettings.FirstOrDefaultAsync(a => a.StoreId == settings.StoreId);
+                using var context = pluginDbContextFactory.CreateContext();
+                var dbSettings = await context.MtPelerinSettings.FirstOrDefaultAsync(a => a.StoreId == settings.StoreId);
                 if (dbSettings == null)
                 {
-                    _context.MtPelerinSettings.Add(settings);
+                    context.MtPelerinSettings.Add(settings);
                 }
                 else
                 {
                     dbSettings.Lang = settings.Lang;
                     dbSettings.UseBridgeApp = settings.UseBridgeApp;
                     dbSettings.Phone = settings.Phone;
-                    _context.MtPelerinSettings.Update(dbSettings);
+                    context.MtPelerinSettings.Update(dbSettings);
                 }
 
-                await _context.SaveChangesAsync();
+                await context.SaveChangesAsync();
                 return;
 
             }
             catch (Exception e)
             {
-                _logger.LogError(e, "MtPelerinPlugin:UpdateSettings()");
+                logger.LogError(e, "MtPelerinPlugin:UpdateSettings()");
                 throw;
             }
         }
@@ -145,14 +113,14 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                     PayoutMethods = new[] { payoutMethodId.ToString() }
                 };
 
-                var store = await _storeRepository.FindStore(storeId);
-                var ppId = await _pullPaymentService.CreatePullPayment(store, ppRequest);
+                var store = await storeRepository.FindStore(storeId);
+                var ppId = await pullPaymentHostedService.CreatePullPayment(store, ppRequest);
 
-                await using var btcPayCtx = _btcPayDbContextFactory.CreateContext();
+                await using var btcPayCtx = btcPayDbContextFactory.CreateContext();
                 var pp = await btcPayCtx.PullPayments.FindAsync(ppId);
                 var blob = pp.GetBlob();
 
-                var payoutHandler = _payoutHandlers.TryGet(payoutMethodId);
+                var payoutHandler = payoutHandlers.TryGet(payoutMethodId);
                 if (payoutHandler == null)
                     throw new Exception($"No payout handler found for {payoutMethodId}");
 
@@ -169,7 +137,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
 
                // (mtPelerinDestination, error) = await payoutHandler.ParseAndValidateClaimDestination(sDest, blob, cancellationToken);
 
-                var result = await _pullPaymentHostedService.Claim(new ClaimRequest
+                var result = await pullPaymentHostedService.Claim(new ClaimRequest
                 {
                     Destination = mtPelerinDestination,
                     PullPaymentId = ppId,
@@ -196,7 +164,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
             }
             catch (Exception e)
             {
-                _logger.LogError(e, "MtPelerinPlugin:CreatePayout()");
+                logger.LogError(e, "MtPelerinPlugin:CreatePayout()");
                 throw;
             }
         }
@@ -212,28 +180,27 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
 
             try
             {
-                var store = await _storeRepository.FindStore(storeId);
+                var store = await storeRepository.FindStore(storeId);
 
                 var walletId = new WalletId(store.Id, "BTC");
-                var derivationScheme = store.GetDerivationSchemeSettings(_handlers, walletId.CryptoCode);
+                var derivationScheme = store.GetDerivationSchemeSettings(handlers, walletId.CryptoCode);
                 if (derivationScheme == null)
                     return signInfo;
 
-                var btcNetwork = _networkProvider.DefaultNetwork as BTCPayNetwork;
+                var btcNetwork = networkProvider.DefaultNetwork as BTCPayNetwork;
                 if (btcNetwork == null)
                     return signInfo;
 
                 using CancellationTokenSource cts = new(TimeSpan.FromSeconds(3));
-                var wallet = _walletProvider.GetWallet(btcNetwork);
+                var wallet = walletProvider.GetWallet(btcNetwork);
                 var utxos = await wallet.GetUnspentCoins(derivationScheme.AccountDerivation);
                 if (utxos.Length == 0)
                     return signInfo;
 
                 var utxo = utxos.OrderByDescending(u => u.Value).FirstOrDefault();
-                var address = utxo.Address;
-                signInfo.SenderBtcAddress = address.ToString();
+                signInfo.SenderBtcAddress = utxo.Address.ToString();
 
-                var explorer = _explorerClientProvider.GetExplorerClient(btcNetwork);
+                var explorer = explorerClientProvider.GetExplorerClient(btcNetwork);
                 var masterKeyString = await explorer.GetMetadataAsync<string>(
                     derivationScheme.AccountDerivation,
                     WellknownMetadataKeys.MasterHDKey);
@@ -244,33 +211,21 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
 
                     var accountKeyPath = new KeyPath("m/84'/0'/0'");
                     var fullKeyPath = accountKeyPath.Derive(utxo.KeyPath);
-
-                    _logger.LogInformation($"UTXO KeyPath (relative): {utxo.KeyPath}");
-                    _logger.LogInformation($"Full KeyPath: {fullKeyPath}");
-
                     var derivedKey = extKey.Derive(fullKeyPath);
-
-                    // Vérification (optionnelle mais recommandée)
                     var derivedAddress = derivedKey.PrivateKey.PubKey.GetAddress(ScriptPubKeyType.Segwit, btcNetwork.NBitcoinNetwork);
-                    _logger.LogInformation($"Derived Address: {derivedAddress}");
-                    _logger.LogInformation($"Expected Address: {signInfo.SenderBtcAddress}");
-                    _logger.LogInformation($"Key is compressed: {derivedKey.PrivateKey.PubKey.IsCompressed}");
-                    var wif = derivedKey.PrivateKey.GetWif(btcNetwork.NBitcoinNetwork).ToString();
-                    _logger.LogInformation($"Derived WIF: {wif}");
+                    // logger.LogInformation($"Derived Address: {derivedAddress}");
+                    // logger.LogInformation($"Expected Address: {signInfo.SenderBtcAddress}");
 
                     signInfo.Code = new Random().Next(1000, 9999);
                     var messageToSign = "MtPelerin-" + signInfo.Code;
                     signInfo.Signature = SignBitcoinMessage(derivedKey.PrivateKey, messageToSign);
-                    _logger.LogInformation($"Signing message: {messageToSign} with address {signInfo.SenderBtcAddress}");
-                    _logger.LogInformation($"Signature: {signInfo.Signature} (derivedKey)");
-
-                    var sSigne2d = SignBitcoinMessage(extKey.PrivateKey, messageToSign);
-                    _logger.LogInformation($"Signature: {sSigne2d} (ExtKey)");
+                    //  logger.LogInformation($"Signing message: {messageToSign} with address {signInfo.SenderBtcAddress}");
+                    // logger.LogInformation($"Signature: {signInfo.Signature} (derivedKey)");
                 }
             }
             catch (Exception e)
             {
-                _logger.LogError(e, "MtPelerinPlugin:GetSigningAdressInfo()");
+                logger.LogError(e, "MtPelerinPlugin:GetSigningAdressInfo()");
             }
             return signInfo;
         }
@@ -324,11 +279,11 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
             StoreWalletConfig cnfg = new StoreWalletConfig();
             try
             {
-                var store = await _storeRepository.FindStore(storeId);
+                var store = await storeRepository.FindStore(storeId);
                 var blob = store.GetStoreBlob();
 
                 cnfg.FiatCurrency = blob.DefaultCurrency;
-                if (_networkProvider.DefaultNetwork.IsBTC)
+                if (networkProvider.DefaultNetwork.IsBTC)
                 {
                     getPaymentMethods(store, blob,
                         out var derivationSchemes, out var lightningNodes);
@@ -339,7 +294,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                     if (cnfg.OnChainEnabled)
                     {
                         var walletId = new WalletId(store.Id, "BTC");
-                        var data = await _walletHistogramService.GetHistogram(store, walletId, HistogramType.Week);
+                        var data = await walletHistogramService.GetHistogram(store, walletId, HistogramType.Week);
                         if (data != null)
                         {
                             cnfg.OnChainBalance = data.Balance;
@@ -347,11 +302,11 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                         else
                         {
                             using CancellationTokenSource cts = new(TimeSpan.FromSeconds(3));
-                            var wallet = _walletProvider.GetWallet(_networkProvider.DefaultNetwork);
-                            var derivation = store.GetDerivationSchemeSettings(_handlers, walletId.CryptoCode);
+                            var wallet = walletProvider.GetWallet(networkProvider.DefaultNetwork);
+                            var derivation = store.GetDerivationSchemeSettings(handlers, walletId.CryptoCode);
                             if (derivation is not null)
                             {
-                                var network = _handlers.GetBitcoinHandler(walletId.CryptoCode).Network;
+                                var network = handlers.GetBitcoinHandler(walletId.CryptoCode).Network;
                                 var balance = await wallet.GetBalance(derivation.AccountDerivation, cts.Token);
                                 cnfg.OnChainBalance = balance.Available.GetValue(network);
                             }
@@ -379,12 +334,12 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
 
                     if (cnfg.OnChainBalance > 0 || cnfg.OffChainBalance > 0)
                     {
-                        if (_httpClient2.BaseAddress == null)
+                        if (httpClient2.BaseAddress == null)
                         {
-                            _httpClient2.BaseAddress = new Uri($"{BaseUrl}/api/");
+                            httpClient2.BaseAddress = new Uri($"{BaseUrl}/api/");
                         }
                         string sRep;
-                        using (var rep = await _httpClient2.GetAsync($"rates?storeId={storeId}&currencyPairs=BTC_{cnfg.FiatCurrency}"))
+                        using (var rep = await httpClient2.GetAsync($"rates?storeId={storeId}&currencyPairs=BTC{cnfg.FiatCurrency}"))
                         {
                             rep.EnsureSuccessStatusCode();
                             sRep = await rep.Content.ReadAsStringAsync();
@@ -401,7 +356,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
                             cnfg.ChfRate = cnfg.Rate;
                         } else
                         {
-                            using (var rep = await _httpClient2.GetAsync($"rates?storeId={storeId}&currencyPairs=BTC_CHF"))
+                            using (var rep = await httpClient2.GetAsync($"rates?storeId={storeId}&currencyPairs=BTCCHF"))
                             {
                                 rep.EnsureSuccessStatusCode();
                                 sRep = await rep.Content.ReadAsStringAsync();
@@ -421,7 +376,7 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
             }
             catch (Exception e)
             {
-                _logger.LogError(e, "MtPelerinPlugin:GetBalances()");
+                logger.LogError(e, "MtPelerinPlugin:GetBalances()");
                 //            throw;
             }
             return cnfg;
@@ -434,18 +389,18 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
             var excludeFilters = storeBlob.GetExcludedPaymentMethods();
             var derivationByCryptoCode =
                 store
-                    .GetPaymentMethodConfigs<DerivationSchemeSettings>(_handlers)
-                    .ToDictionary(c => ((IHasNetwork)_handlers[c.Key]).Network.CryptoCode, c => c.Value);
+                    .GetPaymentMethodConfigs<DerivationSchemeSettings>(handlers)
+                    .ToDictionary(c => ((IHasNetwork)handlers[c.Key]).Network.CryptoCode, c => c.Value);
 
             var lightningByCryptoCode = store
-                .GetPaymentMethodConfigs(_handlers)
+                .GetPaymentMethodConfigs(handlers)
                 .Where(c => c.Value is LightningPaymentMethodConfig)
-                .ToDictionary(c => ((IHasNetwork)_handlers[c.Key]).Network.CryptoCode, c => (LightningPaymentMethodConfig)c.Value);
+                .ToDictionary(c => ((IHasNetwork)handlers[c.Key]).Network.CryptoCode, c => (LightningPaymentMethodConfig)c.Value);
 
             derivationSchemes = new List<StoreDerivationScheme>();
             lightningNodes = new List<StoreLightningNode>();
 
-            foreach (var handler in _handlers)
+            foreach (var handler in handlers)
             {
                 if (handler is BitcoinLikePaymentHandler { Network: var network })
                 {
@@ -480,17 +435,17 @@ namespace BTCPayServer.Plugins.MtPelerin.Services
         }
         private ILightningClient GetLightningClient(BTCPayServer.Data.StoreData store)
         {
-            var network = _networkProvider.GetNetwork<BTCPayNetwork>("BTC");
+            var network = networkProvider.GetNetwork<BTCPayNetwork>("BTC");
             var id = PaymentTypes.LN.GetPaymentMethodId("BTC");
-            var existing = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(id, _handlers);
+            var existing = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(id, handlers);
             if (existing == null)
                 return null;
 
             if (existing.GetExternalLightningUrl() is { } connectionString)
             {
-                return _lightningClientFactory.Create(connectionString, network);
+                return lightningClientFactory.Create(connectionString, network);
             }
-            if (existing.IsInternalNode && _lightningNetworkOptions.Value.InternalLightningByCryptoCode.TryGetValue("BTC", out var internalLightningNode))
+            if (existing.IsInternalNode && lightningNetworkOptions.Value.InternalLightningByCryptoCode.TryGetValue("BTC", out var internalLightningNode))
             {
                 return internalLightningNode;
             }
