@@ -1,7 +1,7 @@
-# MtPelerin plugin for BTCPay Server
+# Mt Pelerin plugin for BTCPay Server
 
-This plugin allows you to forward received BTC funds (on-chain or Lightning) to [MtPelerin](https://www.mtpelerin.com/).  
-Get funds in fiat (EUR, CHF or other currencies) or swap them into the crypto of your choice.  
+This plugin allows you to forward received BTC funds (on-chain or Lightning) to [Mt Pelerin](https://www.mtpelerin.com/).  
+Get funds in fiat (EUR, CHF or other fiat currencies), or swap them into the cryptocurrency of your choice.  
 The plugin provides an integrated connection to the Mt Pelerin widget, so you can easily send your bitcoins for sale or exchange.
 
 ## Settings
@@ -10,7 +10,7 @@ The plugin settings must be configured for each BTCPay store. They are accessibl
 
 - **Phone**: Pre-fills your user's mobile phone number during the login step. Enter it as digits starting with the country code.  
   Example: `phone=41791234567` for the phone number +41 79 123 45 67.
-- **Use Bridge Wallet**: You can select this option if you already have the Bridge Wallet app installed on your phone.  
+- **Use Bridge Wallet**: You can select this option if you already have Mt Pelerin's Bridge Wallet app installed on your phone.  
   You will then be able to scan a QR Code during the process to make identification easier.  
   If this option is enabled, it overrides the `phone` parameter.
 - **Display Language**: Select the language used in the Mt Pelerin widget.  
